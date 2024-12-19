@@ -40,36 +40,36 @@ pub async fn run_backtest_and_improve() -> Result<()> {
     // Load the current prompt from a file
     let base_prompt = fs::read_to_string(PROMPT_FILE).context("Failed to read base prompt file")?;
 
-    let mut futures = FuturesUnordered::new();
+    let tasks = (CANDLE_HOURS..eth_candles.len()).filter_map(|i| {
+        if btc_candles.len() < i || sol_candles.len() < i {
+            // Not enough data for this index
+            return None;
+        }
 
-    for i in CANDLE_HOURS..eth_candles.len() {
         let eth_window = &eth_candles[i - CANDLE_HOURS..i];
-        let btc_window = if btc_candles.len() >= i {
-            &btc_candles[i - CANDLE_HOURS..i]
-        } else {
-            continue;
-        };
-        let sol_window = if sol_candles.len() >= i {
-            &sol_candles[i - CANDLE_HOURS..i]
-        } else {
-            continue;
-        };
+        let btc_window = &btc_candles[i - CANDLE_HOURS..i];
+        let sol_window = &sol_candles[i - CANDLE_HOURS..i];
 
         let data_section = build_data_section(eth_window, btc_window, sol_window);
-        // let full_prompt = base_prompt.replace("<<DATA_SECTION>>", &data_section);
-        let full_prompt = format!("{}\n{}", base_prompt, data_section);
-
+        let full_prompt = format!("{}\n\n{}", base_prompt, data_section);
         let label = labels[i - 1];
+
+        // Each future returns Result<(Action, String, Action)>
         let fut = query_model_and_compare(full_prompt, label).map_ok(move |res| (i, res));
-        futures.push(fut);
-    }
+
+        Some(fut)
+    });
+
+    // Convert our tasks into a stream, then apply buffer_unordered(5) to limit concurrency
+    let results = futures::stream::iter(tasks).buffer_unordered(10);
+
+    futures::pin_mut!(results);
 
     let mut correct_count = 0usize;
     let mut total = 0usize;
     let mut failures = Vec::new();
 
-    // Just use futures.next() without buffer_unordered
-    while let Some(res) = futures.next().await {
+    while let Some(res) = results.next().await {
         let (i, (pred, rationale, label)) = res?;
         total += 1;
         if pred == label {
