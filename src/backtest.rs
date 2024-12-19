@@ -30,8 +30,8 @@ pub async fn run_backtest_and_improve() -> Result<f64> {
     fs::create_dir_all(CACHE_DIR)?;
 
     // We'll fetch data for the last N hours
-    let end = Utc::now();
-    let start = end - Duration::hours(48); // 48 hours of data
+    let end = Utc::now() - Duration::hours(48);
+    let start = end - Duration::hours(48 * 2); // 48 hours of data
 
     // Fetch or load cached data
     let eth_candles = candles_to_array(load_or_fetch("ETH", start, end).await?);

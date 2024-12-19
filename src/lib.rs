@@ -1,10 +1,11 @@
 pub mod backtest;
 pub mod prompt_builder;
 
-use std::env;
+use std::{env, fs};
 
 use anyhow::{Context as _, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
+use prompt_builder::build_data_section;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -181,6 +182,60 @@ pub fn label_candles(data: &[[f64; 6]]) -> Vec<Action> {
     labels.push(None);
 
     labels
+}
+
+const CANDLE_HOURS: usize = 24; // 24-hour window
+const PROMPT_FILE: &str = "prompt.txt";
+
+pub async fn run_live_analysis() -> Result<(Action, String)> {
+    // We'll fetch data for the last N hours
+    let end = Utc::now();
+    let start = end - Duration::hours(CANDLE_HOURS as i64);
+
+    // Fetch live data directly from the API (no caching)
+    let eth_candles = candles_to_array(get_candle_data("ETH", start, end).await?);
+    let btc_candles = candles_to_array(get_candle_data("BTC", start, end).await?);
+    let sol_candles = candles_to_array(get_candle_data("SOL", start, end).await?);
+
+    if eth_candles.len() < CANDLE_HOURS
+        || btc_candles.len() < CANDLE_HOURS
+        || sol_candles.len() < CANDLE_HOURS
+    {
+        anyhow::bail!("Not enough recent data to perform live analysis");
+    }
+
+    let base_prompt = fs::read_to_string(PROMPT_FILE).context("Failed to read base prompt file")?;
+
+    let eth_window = &eth_candles[eth_candles.len() - CANDLE_HOURS..];
+    let btc_window = &btc_candles[btc_candles.len() - CANDLE_HOURS..];
+    let sol_window = &sol_candles[sol_candles.len() - CANDLE_HOURS..];
+
+    let data_section = build_data_section(eth_window, btc_window, sol_window);
+    let full_prompt = format!("{}\n\n{}", base_prompt, data_section);
+
+    let response = analyze_data_gpt(&full_prompt, Model::O1Mini).await?;
+    let clean_response = response.replace("```json", "").replace("```", "");
+
+    let val: Value = serde_json::from_str(&clean_response)
+        .with_context(|| format!("Response not valid JSON: {}", clean_response))?;
+    let action_str = val
+        .get("action")
+        .and_then(|a| a.as_str())
+        .context("Missing 'action' field in response")?;
+    let rationale = val
+        .get("rationale")
+        .and_then(|r| r.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let pred = match action_str {
+        "long" => Action::Long,
+        "short" => Action::Short,
+        "none" => Action::None,
+        _ => Action::None,
+    };
+
+    Ok((pred, rationale))
 }
 
 #[cfg(test)]
