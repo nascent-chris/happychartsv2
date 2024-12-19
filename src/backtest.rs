@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::stream::StreamExt;
 use futures::TryFutureExt;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt::Write as FmtWrite;
 use std::fs;
-use std::path::Path; // Importing fmt::Write so writeln! works on String
+use std::path::Path;
 
 use crate::prompt_builder::build_data_section;
 use crate::{
@@ -16,12 +17,19 @@ use crate::{
 const CANDLE_HOURS: usize = 24; // 24-hour window
 const CACHE_DIR: &str = "cache";
 const PROMPT_FILE: &str = "prompt.txt";
+const HISTORY_FILE: &str = "prompt_history.json";
 
-pub async fn run_backtest_and_improve() -> Result<()> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PromptRecord {
+    prompt: String,
+    score: f64,
+}
+
+pub async fn run_backtest_and_improve() -> Result<f64> {
     // Ensure cache directory exists
     fs::create_dir_all(CACHE_DIR)?;
 
-    // We'll fetch data for the last N hours, let's say we fetch 48 hours for testing.
+    // We'll fetch data for the last N hours
     let end = Utc::now();
     let start = end - Duration::hours(48); // 48 hours of data
 
@@ -40,9 +48,9 @@ pub async fn run_backtest_and_improve() -> Result<()> {
     // Load the current prompt from a file
     let base_prompt = fs::read_to_string(PROMPT_FILE).context("Failed to read base prompt file")?;
 
+    // Prepare tasks for each candle window
     let tasks = (CANDLE_HOURS..eth_candles.len()).filter_map(|i| {
         if btc_candles.len() < i || sol_candles.len() < i {
-            // Not enough data for this index
             return None;
         }
 
@@ -54,15 +62,11 @@ pub async fn run_backtest_and_improve() -> Result<()> {
         let full_prompt = format!("{}\n\n{}", base_prompt, data_section);
         let label = labels[i - 1];
 
-        // Each future returns Result<(Action, String, Action)>
         let fut = query_model_and_compare(full_prompt, label).map_ok(move |res| (i, res));
-
         Some(fut)
     });
 
-    // Convert our tasks into a stream, then apply buffer_unordered(5) to limit concurrency
     let results = futures::stream::iter(tasks).buffer_unordered(20);
-
     futures::pin_mut!(results);
 
     let mut correct_count = 0usize;
@@ -87,15 +91,48 @@ pub async fn run_backtest_and_improve() -> Result<()> {
 
     tracing::info!("Backtesting complete. Accuracy: {:.2}%", accuracy * 100.0);
 
+    // Update prompt history
+    let history_path = format!("{}/{}", CACHE_DIR, HISTORY_FILE);
+    let mut history: Vec<PromptRecord> = if Path::new(&history_path).exists() {
+        let data = fs::read_to_string(&history_path)?;
+        serde_json::from_str(&data).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    // Append current prompt and score
+    history.push(PromptRecord {
+        prompt: base_prompt.clone(),
+        score: accuracy,
+    });
+
+    // Keep only the last 10
+    if history.len() > 10 {
+        let start = history.len() - 10;
+        history = history[start..].to_vec();
+    }
+
+    // Save updated history
+    let json = serde_json::to_string_pretty(&history)?;
+    fs::write(&history_path, json)?;
+
     if !failures.is_empty() {
         tracing::debug!(?failures);
-        let improvement_prompt = build_improvement_prompt(&base_prompt, &failures);
+
+        // Prepare previous prompts and their scores for improvement prompt
+        let prev_prompts_scores: Vec<(String, f64)> = history
+            .iter()
+            .map(|r| (r.prompt.clone(), r.score))
+            .collect();
+
+        let improvement_prompt =
+            build_improvement_prompt(&base_prompt, &failures, &prev_prompts_scores);
         let improved_prompt = analyze_data_gpt(&improvement_prompt, Model::O1Preview).await?;
         fs::write(PROMPT_FILE, improved_prompt)?;
         tracing::info!("Prompt improved and saved to {}", PROMPT_FILE);
     }
 
-    Ok(())
+    Ok(accuracy)
 }
 
 async fn load_or_fetch(
@@ -129,7 +166,10 @@ async fn query_model_and_compare(
 
     let val: Value = serde_json::from_str(&clean_response)
         .with_context(|| format!("Response not valid JSON: {}", clean_response))?;
-    let action_str = val.get("action").and_then(|a| a.as_str()).unwrap_or("none");
+    let action_str = val
+        .get("action")
+        .and_then(|a| a.as_str())
+        .context("Missing 'action' field in response")?;
     let rationale = val
         .get("rationale")
         .and_then(|r| r.as_str())
@@ -149,11 +189,12 @@ async fn query_model_and_compare(
 fn build_improvement_prompt(
     base_prompt: &str,
     failures: &[(usize, Action, Action, String)],
+    previous_prompts: &[(String, f64)],
 ) -> String {
     let mut prompt = String::new();
     prompt.push_str("You are an assistant that improves trading prompts.\n");
     prompt.push_str("We have a base prompt (below) that instructs the model to produce an action (long, short, or none) and a brief rationale based on provided ETH, BTC, and SOL market data.\n");
-    prompt.push_str("We performed backtesting and found some instances where the model's predicted action did not match the correct action.\n");
+    prompt.push_str("We performed backtesting and found some instances where the model's predicted action did not match the correct action.\n\n");
     prompt.push_str("Below are some examples of these failures:\n");
     for (i, pred, label, rationale) in failures.iter().take(10) {
         let _ = writeln!(
@@ -162,6 +203,19 @@ fn build_improvement_prompt(
             i, pred, label, rationale
         );
     }
+
+    prompt.push_str(
+        "\nWe also have a history of previous prompts and their overall accuracy scores:\n",
+    );
+    for (p, score) in previous_prompts {
+        let _ = writeln!(
+            prompt,
+            "- Prompt score: {:.2}% | Prompt snippet: {:.50}...",
+            score * 100.0,
+            p.replace('\n', " ")
+        );
+    }
+
     prompt.push_str("\nWe need to improve the prompt so that:\n");
     prompt.push_str("- The model is more likely to produce correct 'action' decisions.\n");
     prompt.push_str("- The rationale remains concise and well-aligned with the chosen action.\n");
