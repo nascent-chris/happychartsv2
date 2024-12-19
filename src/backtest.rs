@@ -56,7 +56,8 @@ pub async fn run_backtest_and_improve() -> Result<()> {
         };
 
         let data_section = build_data_section(eth_window, btc_window, sol_window);
-        let full_prompt = base_prompt.replace("<<DATA_SECTION>>", &data_section);
+        // let full_prompt = base_prompt.replace("<<DATA_SECTION>>", &data_section);
+        let full_prompt = format!("{}\n{}", base_prompt, data_section);
 
         let label = labels[i - 1];
         let fut = query_model_and_compare(full_prompt, label).map_ok(move |res| (i, res));
@@ -87,8 +88,9 @@ pub async fn run_backtest_and_improve() -> Result<()> {
     tracing::info!("Backtesting complete. Accuracy: {:.2}%", accuracy * 100.0);
 
     if !failures.is_empty() {
+        tracing::debug!(?failures);
         let improvement_prompt = build_improvement_prompt(&base_prompt, &failures);
-        let improved_prompt = analyze_data_gpt(&improvement_prompt, Model::O1).await?;
+        let improved_prompt = analyze_data_gpt(&improvement_prompt, Model::O1Preview).await?;
         fs::write(PROMPT_FILE, improved_prompt)?;
         tracing::info!("Prompt improved and saved to {}", PROMPT_FILE);
     }
@@ -121,7 +123,12 @@ async fn query_model_and_compare(
     label: Action,
 ) -> Result<(Action, String, Action)> {
     let response = analyze_data_gpt(&prompt, Model::O1Mini).await?;
-    let val: Value = serde_json::from_str(&response).context("Response not valid JSON")?;
+
+    // Clean up the response to remove code fences if present
+    let clean_response = response.replace("```json", "").replace("```", "");
+
+    let val: Value = serde_json::from_str(&clean_response)
+        .with_context(|| format!("Response not valid JSON: {}", clean_response))?;
     let action_str = val.get("action").and_then(|a| a.as_str()).unwrap_or("none");
     let rationale = val
         .get("rationale")

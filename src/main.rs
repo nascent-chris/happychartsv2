@@ -1,7 +1,10 @@
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().unwrap();
     // Initialize logging
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt()
+        .with_env_filter("happychartsv2=debug")
+        .init();
 
     tracing::info!("Starting backtest and improvement process...");
 

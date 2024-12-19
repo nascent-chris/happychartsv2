@@ -10,14 +10,14 @@ use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Model {
-    O1,
+    O1Preview,
     O1Mini,
 }
 
 impl Model {
     pub fn as_str(&self) -> &str {
         match self {
-            Model::O1 => "o1",
+            Model::O1Preview => "o1-preview",
             Model::O1Mini => "o1-mini",
         }
     }
@@ -84,62 +84,62 @@ async fn get_candle_data(
 }
 
 pub async fn analyze_data_gpt(prompt: &str, model: Model) -> Result<String> {
-    let api_key = env::var("OPENAI_API_KEY")?;
+    let api_key =
+        env::var("OPENAI_API_KEY").context("OPENAI_API_KEY environment variable is not set")?;
 
     let body = json!({
         "model": model.as_str(),
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": prompt
-                    },
-                    // {
-                    //     "type": "image_url",
-                    //     "image_url": {
-                    //         "url": base64_url
-                    //     }
-                    // }
-                ]
+                "content": prompt
             }
         ]
     });
 
     let client = reqwest::Client::new();
-    tracing::debug!("Sending request to OpenAI API");
-    let response = client
+    tracing::debug!(
+        ?model,
+        prompt_len = prompt.len(),
+        "Sending request to OpenAI API"
+    );
+
+    let resp = client
         .post("https://api.openai.com/v1/chat/completions")
         .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {api_key}"))
-        .timeout(std::time::Duration::from_secs(60 * 5))
+        .header("Authorization", format!("Bearer {}", api_key))
+        .timeout(std::time::Duration::from_secs(300))
         .json(&body)
         .send()
-        .await?;
-    tracing::debug!("Received response from OpenAI API");
+        .await
+        .context("Failed to send request to OpenAI API")?;
 
-    let mut value = response.json::<Value>().await?;
+    // Check if the response is successful
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        tracing::error!("OpenAI API returned error: {} - {}", status, text);
+        anyhow::bail!("OpenAI API error: {} - {}", status, text);
+    }
 
-    let content = value
-        .get_mut("choices")
-        .context("no choices in response")?
-        .take()
-        .as_array_mut()
-        .map(std::mem::take)
-        .context("no choice in response")?
-        .into_iter()
-        .next()
-        .context("no choice in response")?
-        .get_mut("message")
-        .context("no message in response")?
-        .take()
-        .get_mut("content")
-        .context("no content in response")?
-        .take()
-        .as_str()
-        .context("content is not a string")?
-        .to_string();
+    let val: Value = resp
+        .json()
+        .await
+        .context("Failed to parse OpenAI API response as JSON")?;
+
+    tracing::debug!("Full OpenAI API response: {}", val);
+
+    // Extract the "content" field from the first choice
+    let content = val["choices"]
+        .get(0)
+        .and_then(|choice| choice["message"]["content"].as_str())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Could not find 'content' field in the API response: {}",
+                val
+            )
+        })?;
 
     Ok(content)
 }
@@ -212,7 +212,7 @@ mod tests {
     async fn test_basic() {
         dotenvy::dotenv().unwrap();
         tracing_subscriber::fmt::init();
-        let response = analyze_data_gpt("Hello, world!", Model::O1Mini)
+        let response = analyze_data_gpt("Hello, world!", Model::O1Preview)
             .await
             .unwrap();
         tracing::info!(?response);
