@@ -144,16 +144,16 @@ pub async fn analyze_data_gpt(prompt: &str, model: Model) -> Result<String> {
     Ok(content)
 }
 
+// Profit threshold multipliers
+pub const LONG_THRESHOLD: f64 = 1.003; // +0.3%
+pub const SHORT_THRESHOLD: f64 = 0.997; // -0.3%
+
 pub fn label_candles(data: &[[f64; 6]]) -> Vec<Action> {
     use Action::*;
     // For convenience, define indexes into the candle array
     const HIGH: usize = 2;
     const LOW: usize = 3;
     const CLOSE: usize = 4;
-
-    // Profit threshold multipliers
-    const LONG_THRESHOLD: f64 = 1.003; // +0.3%
-    const SHORT_THRESHOLD: f64 = 0.997; // -0.3%
 
     let mut labels = data
         .windows(2)
@@ -186,10 +186,11 @@ pub fn label_candles(data: &[[f64; 6]]) -> Vec<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Action;
 
     #[test]
-    fn test_label_candles() {
-        // A small test with dummy data
+    fn test_label_candles_basic_short_scenario() {
+        // Original scenario from the provided test
         let data = [
             [0.0, 0.0, 3603.0, 3599.99, 3594.88, 100.0],
             [0.0, 0.0, 3600.0, 3565.45, 3599.99, 100.0],
@@ -197,24 +198,116 @@ mod tests {
         ];
 
         let labels = label_candles(&data);
-
         assert_eq!(labels.len(), 3);
-        // Just a sanity check with the given logic:
-        // For the first candle:
-        //   Close=3594.88, next High=3600 (<3594.88*1.003=3605.76? no), next Low=3565.45 (<3594.88*0.997=3583.09 yes) → "short"
-        // For the second candle:
-        //   Close=3599.99, next High=3570.86 (<3609.0 no), next Low=3558.89 (<3599.99*0.997=3591.0 yes) → "short"
-        // Last candle = "none"
+        // Check logic:
+        // 1st candle: short
+        // 2nd candle: short
+        // 3rd candle: none (no future candle)
         assert_eq!(labels, vec![Action::Short, Action::Short, Action::None]);
     }
 
-    #[tokio::test]
-    async fn test_basic() {
-        dotenvy::dotenv().unwrap();
-        tracing_subscriber::fmt::init();
-        let response = analyze_data_gpt("Hello, world!", Model::O1Preview)
-            .await
-            .unwrap();
-        tracing::info!(?response);
+    #[test]
+    fn test_label_candles_single_candle() {
+        // Only one candle => no future candle, label should be [none]
+        let data = [
+            [0.0, 0.0, 100.0, 99.0, 100.0, 500.0], // arbitrary values
+        ];
+
+        let labels = label_candles(&data);
+        assert_eq!(labels, vec![Action::None]);
+    }
+
+    #[test]
+    fn test_label_candles_no_conditions_met() {
+        // No conditions for long or short met
+        // close=100, next high=100.2 (<100*1.003=100.3?), no
+        // next low=99.8 (>100*0.997=99.7?), no (low must be <=99.7 to trigger short)
+        let data = [
+            [0.0, 0.0, 100.2, 99.8, 100.0, 500.0],
+            [0.0, 0.0, 100.2, 99.8, 100.1, 500.0],
+            [0.0, 0.0, 100.2, 99.8, 100.2, 500.0],
+        ];
+
+        let labels = label_candles(&data);
+        assert_eq!(labels.len(), 3);
+        // Each window:
+        // 1st->2nd: close=100.0, needs high>=100.3 or low<=99.7; got high=100.2, low=99.8 => none
+        // 2nd->3rd: close=100.1, needs high>=100.401 or low<=99.799; got high=100.2, low=99.8 => none
+        // last candle => none
+        assert_eq!(labels, vec![Action::None, Action::None, Action::None]);
+    }
+
+    #[test]
+    fn test_label_candles_long_condition() {
+        // Trigger a long condition:
+        // close=100.0, next candle high=101.0 (1% increase >0.3%), no short condition triggered
+        let data = [
+            [0.0, 0.0, 101.0, 99.5, 100.0, 1000.0],
+            [0.0, 0.0, 101.0, 100.0, 100.5, 1000.0],
+        ];
+        // For the first candle's label:
+        // c_close=100.0, LONG_THRESHOLD=100.3, next_high=101.0 >100.3 => long condition met
+        // short condition would require next_low<=99.7. If low=100.0 (from 2nd candle), no short triggered.
+        let labels = label_candles(&data);
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0], Action::Long);
+        assert_eq!(labels[1], Action::None);
+    }
+
+    #[test]
+    fn test_label_candles_short_condition() {
+        // Trigger a short condition:
+        // c_close=100.0, need next_low<=99.7
+        let data = [
+            [0.0, 0.0, 100.5, 99.8, 100.0, 1000.0],
+            [0.0, 0.0, 100.2, 99.6, 100.0, 1000.0], // low=99.6 triggers short
+        ];
+
+        let labels = label_candles(&data);
+        assert_eq!(labels, vec![Action::Short, Action::None]);
+    }
+
+    #[test]
+    fn test_label_candles_both_conditions() {
+        // Both long and short conditions are met simultaneously:
+        // c_close=100.0
+        // long requires next_high>=100.3
+        // short requires next_low<=99.7
+        // If next candle: high=100.5, low=99.5
+        // Both triggered => tie-break chooses Short
+        let data = [
+            [0.0, 0.0, 100.5, 99.5, 100.0, 1000.0],
+            [0.0, 0.0, 101.0, 99.5, 100.3, 1000.0],
+        ];
+
+        let labels = label_candles(&data);
+        assert_eq!(labels.len(), 2);
+        // 1st->2nd candle: both long and short triggered => short chosen
+        assert_eq!(labels[0], Action::Short);
+        assert_eq!(labels[1], Action::None);
+    }
+
+    #[test]
+    fn test_label_candles_multiple_varied() {
+        let data = [
+            [0.0, 0.0, 100.2, 99.8, 100.0, 500.0], // Candle0
+            [0.0, 0.0, 100.2, 99.8, 100.0, 500.0], // Candle1
+            [0.0, 0.0, 102.0, 99.9, 101.0, 500.0], // Candle2
+            [0.0, 0.0, 101.1, 99.0, 100.5, 500.0], // Candle3
+            [0.0, 0.0, 102.0, 99.0, 100.0, 500.0], // Candle4
+        ];
+
+        let labels = label_candles(&data);
+        assert_eq!(labels.len(), 5);
+        assert_eq!(
+            labels,
+            vec![
+                Action::None,
+                Action::Long,
+                Action::Short,
+                Action::Short,
+                Action::None
+            ]
+        );
     }
 }

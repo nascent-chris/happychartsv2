@@ -61,7 +61,7 @@ pub async fn run_backtest_and_improve() -> Result<()> {
     });
 
     // Convert our tasks into a stream, then apply buffer_unordered(5) to limit concurrency
-    let results = futures::stream::iter(tasks).buffer_unordered(10);
+    let results = futures::stream::iter(tasks).buffer_unordered(20);
 
     futures::pin_mut!(results);
 
