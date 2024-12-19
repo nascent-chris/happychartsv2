@@ -1,13 +1,93 @@
+pub mod backtest;
+pub mod prompt_builder;
+
 use std::env;
 
 use anyhow::{Context as _, Result};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub async fn analyze_data_gpt(prompt: &str) -> Result<String> {
+#[derive(Debug, Clone, Copy)]
+pub enum Model {
+    O1,
+    O1Mini,
+}
+
+impl Model {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Model::O1 => "o1",
+            Model::O1Mini => "o1-mini",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Action {
+    Long,
+    Short,
+    None,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct CoinbaseCandle(
+    f64, // time
+    f64, // low
+    f64, // high
+    f64, // open
+    f64, // close
+    f64, // volume
+);
+
+pub fn candles_to_array(candles: Vec<CoinbaseCandle>) -> Vec<[f64; 6]> {
+    // Coinbase returns candles most recent first, so reverse to chronological
+    let mut candles = candles;
+    candles.reverse();
+
+    candles
+        .into_iter()
+        .map(|c| {
+            let CoinbaseCandle(time, low, high, open, close, volume) = c;
+            [time, open, high, low, close, volume]
+        })
+        .collect()
+}
+
+async fn get_candle_data(
+    symbol: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<Vec<CoinbaseCandle>> {
+    let client = reqwest::Client::new();
+    // let end = Utc::now();
+    // let start = end - chrono::Duration::hours(24);
+
+    let url = format!(
+        "https://api.exchange.coinbase.com/products/{symbol}-USD/candles\
+        ?start={}\
+        &end={}\
+        &granularity=3600",
+        start.timestamp(),
+        end.timestamp()
+    );
+
+    let response = client
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await?;
+
+    let data: Vec<CoinbaseCandle> = response.json().await?;
+    Ok(data)
+}
+
+pub async fn analyze_data_gpt(prompt: &str, model: Model) -> Result<String> {
     let api_key = env::var("OPENAI_API_KEY")?;
 
     let body = json!({
-        "model": "o1-mini",
+        "model": model.as_str(),
         "messages": [
             {
                 "role": "user",
@@ -64,7 +144,8 @@ pub async fn analyze_data_gpt(prompt: &str) -> Result<String> {
     Ok(content)
 }
 
-pub fn label_candles(data: &[[f64; 6]]) -> Vec<&'static str> {
+pub fn label_candles(data: &[[f64; 6]]) -> Vec<Action> {
+    use Action::*;
     // For convenience, define indexes into the candle array
     const HIGH: usize = 2;
     const LOW: usize = 3;
@@ -88,16 +169,16 @@ pub fn label_candles(data: &[[f64; 6]]) -> Vec<&'static str> {
             let short_cond = next_low <= c_close * SHORT_THRESHOLD;
 
             match (long_cond, short_cond) {
-                (true, true) => "long", // tie-break: choose "long"
-                (true, false) => "long",
-                (false, true) => "short",
-                (false, false) => "none",
+                (true, true) => Short, // tie-break: choose "short"
+                (true, false) => Long,
+                (false, true) => Short,
+                (false, false) => None,
             }
         })
         .collect::<Vec<_>>();
 
     // The last candle has no future candle, so "none"
-    labels.push("none");
+    labels.push(None);
 
     labels
 }
@@ -124,14 +205,16 @@ mod tests {
         // For the second candle:
         //   Close=3599.99, next High=3570.86 (<3609.0 no), next Low=3558.89 (<3599.99*0.997=3591.0 yes) → "short"
         // Last candle = "none"
-        assert_eq!(labels, vec!["short", "short", "none"]);
+        assert_eq!(labels, vec![Action::Short, Action::Short, Action::None]);
     }
 
     #[tokio::test]
     async fn test_basic() {
         dotenvy::dotenv().unwrap();
         tracing_subscriber::fmt::init();
-        let response = analyze_data_gpt("Hello, world!").await.unwrap();
+        let response = analyze_data_gpt("Hello, world!", Model::O1Mini)
+            .await
+            .unwrap();
         tracing::info!(?response);
     }
 }
