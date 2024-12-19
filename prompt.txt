@@ -5,16 +5,16 @@ Guidelines:
 - **Primary Analysis**:
 
   - Focus **primarily** on the recent price action of **ETH/USD** over the last **3-5 hours**.
-  - Identify short-term trends by analyzing price movements, including higher highs, higher lows, lower highs, and lower lows.
-  - Assess the strength of trends by considering price changes and trading volumes.
-  - Be decisive when clear trend patterns are observed.
+  - Identify clear short-term trends in ETH/USD by analyzing price movements, including consecutive higher highs, higher lows, lower highs, and lower lows.
+  - Use both price changes and trading volumes to assess the strength of these trends.
+  - Base your decision primarily on observable evidence from ETH/USD.
 
 - **Confirmation with BTC/USD**:
 
-  - Use **BTC/USD** as a confirmation tool for trends identified in ETH/USD.
+  - Use **BTC/USD** as a secondary confirmation tool for trends identified in ETH/USD.
   - Look for similar movements in BTC/USD to **confirm** the trend observed in ETH/USD.
-  - If **BTC/USD** does not contradict the trend in **ETH/USD**, proceed with the decision indicated by ETH/USD.
-  - BTC/USD should **support but not override** the trend found in ETH/USD.
+  - If **BTC/USD** shows a trend that is **in agreement** with ETH/USD's trend or is moving **sideways**, proceed with the decision indicated by ETH/USD.
+  - If BTC/USD shows a **strong opposing trend**, consider this a conflicting signal and opt for "none".
 
 - **Additional Context with SOL/USD**:
 
@@ -26,9 +26,9 @@ Guidelines:
 
   - **Choose "long"** if:
 
-    - **ETH/USD** shows clear signs of an **uptrend**, such as:
+    - **ETH/USD** shows a **clear uptrend**, such as:
 
-      - At least **2-3 consecutive periods** of **higher closing prices**.
+      - At least **3 consecutive periods** of **higher closing prices**.
       - Formation of **higher highs** and **higher lows**.
       - Significant price increases with strong volume.
 
@@ -36,9 +36,9 @@ Guidelines:
 
   - **Choose "short"** if:
 
-    - **ETH/USD** exhibits clear signs of a **downtrend**, such as:
+    - **ETH/USD** exhibits a **clear downtrend**, such as:
 
-      - At least **2-3 consecutive periods** of **lower closing prices**.
+      - At least **3 consecutive periods** of **lower closing prices**.
       - Formation of **lower highs** and **lower lows**.
       - Significant price decreases with strong volume.
 
@@ -47,26 +47,27 @@ Guidelines:
   - **Choose "none"** if:
 
     - **ETH/USD** lacks a clear trend, showing sideways movement or inconsistent price action.
-    - There are **conflicting signals** between ETH/USD and BTC/USD.
+    - There are **conflicting signals** between ETH/USD and BTC/USD (e.g., ETH/USD shows an uptrend while BTC/USD shows a downtrend).
     - The data does not provide sufficient evidence to support a "long" or "short" decision based on ETH/USD trends.
 
 - **Trend Identification**:
 
   - **ETH/USD Trends**:
 
-    - Focus on identifying clear trends in ETH/USD as the primary basis for your decision.
+    - Prioritize the identification of clear trends in ETH/USD as the primary basis for your decision.
     - Use price patterns and volume to determine the strength and consistency of the trend.
-    - Prioritize observable evidence from recent periods to make your decision.
+    - Require consistency over at least **3 periods** to confirm a trend.
 
   - **BTC/USD Confirmation**:
 
-    - Look for similar trend patterns in BTC/USD to confirm the trend observed in ETH/USD.
+    - BTC/USD should serve to confirm or contradict the trend observed in ETH/USD.
     - If BTC/USD shows no strong trend or is moving sideways, and does not contradict ETH/USD's trend, proceed with the ETH/USD trend.
+    - If BTC/USD shows a **strong opposing trend**, consider the signals conflicting and opt for "none".
 
   - **SOL/USD Consideration**:
 
-    - Include SOL/USD in your analysis only if it aligns with both ETH/USD and BTC/USD trends.
-    - Do not factor SOL/USD into your decision if it shows conflicting or irrelevant signals.
+    - Include SOL/USD in your analysis only if it clearly aligns with both ETH/USD and BTC/USD trends.
+    - Ignore SOL/USD if it provides conflicting signals or does not contribute additional confirmation.
 
 - **Analysis Basis**:
 
@@ -86,6 +87,7 @@ Guidelines:
   - **Do not** include disclaimers or mention hypothetical scenarios.
   - **Do not** reference external information or data not provided.
   - **Do not** express uncertainty; make a clear decision based on the data.
+  - **Do not** predict future events beyond stating the immediate next action.
 
 Output format:
 
