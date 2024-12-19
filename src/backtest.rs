@@ -152,26 +152,27 @@ fn build_improvement_prompt(
 ) -> String {
     let mut prompt = String::new();
     prompt.push_str("You are an assistant that improves trading prompts.\n");
-    prompt.push_str("We have a base prompt (below) that instructs the model to produce an action and rationale.\n");
-    prompt.push_str("We performed backtesting, and the model made some incorrect predictions.\n");
-    prompt.push_str("Below are examples of failures:\n");
+    prompt.push_str("We have a base prompt (below) that instructs the model to produce an action (long, short, or none) and a brief rationale based on provided ETH, BTC, and SOL market data.\n");
+    prompt.push_str("We performed backtesting and found some instances where the model's predicted action did not match the correct action.\n");
+    prompt.push_str("Below are some examples of these failures:\n");
     for (i, pred, label, rationale) in failures.iter().take(10) {
-        // Use writeln! now that we imported std::fmt::Write
         let _ = writeln!(
             prompt,
-            "Window {}: predicted {:?}, but correct was {:?}. Rationale: {}",
+            "Window {}: Model predicted {:?}, but the correct action was {:?}. Model's rationale: {}",
             i, pred, label, rationale
         );
     }
-    prompt.push_str(
-        "\nBased on these failures, please suggest improvements to the original prompt so that:\n",
-    );
+    prompt.push_str("\nWe need to improve the prompt so that:\n");
     prompt.push_str("- The model is more likely to produce correct 'action' decisions.\n");
+    prompt.push_str("- The rationale remains concise and well-aligned with the chosen action.\n");
     prompt.push_str(
-        "- The rationale should still be concise, but better aligned with the correct decision.\n",
+        "- The model should not provide disclaimers or mention hypothetical scenarios.\n",
     );
+    prompt.push_str("- The model should consistently rely on patterns, correlations, and recent price changes from the data.\n");
+    prompt.push_str("- The data is appended directly after the prompt.\n");
     prompt.push_str("\nOriginal Prompt:\n");
     prompt.push_str(base_prompt);
-    prompt.push_str("\n\nPlease return the improved prompt as a text.\n");
+    prompt.push_str("\n\nPlease suggest an improved version of the prompt text (without adding any external formatting or code fences), incorporating the above improvements.\n");
+
     prompt
 }
